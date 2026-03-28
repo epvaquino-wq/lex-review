@@ -86,6 +86,17 @@ const App = (() => {
     }
   }
 
+  function updateSyncButton() {
+    const btn = document.getElementById('sidebar-sync-btn');
+    const dot = document.getElementById('sync-status-dot');
+    if (!btn) return;
+    const configured = GistSync.isConfigured();
+    btn.style.display = configured ? 'flex' : 'none';
+    if (dot) {
+      dot.className = 'sync-status-dot' + (configured ? ' connected' : '');
+    }
+  }
+
   function intervalLabel(days) {
     if (days < 1) return '< 1 dia';
     if (days === 1) return '1 dia';
@@ -392,6 +403,12 @@ const App = (() => {
     reviewSession.results.push({ cardId: card.id, quality });
     reviewSession.currentIndex++;
     updateNavBadge();
+
+    // Auto-sync when session ends
+    if (reviewSession.currentIndex >= reviewSession.queue.length) {
+      autoSync();
+    }
+
     renderReview();
   }
 
@@ -608,6 +625,7 @@ const App = (() => {
     Storage.createCard(frente, verso, thread, tags);
     toast('Cartão adicionado com sucesso!', 'success');
     updateNavBadge();
+    autoSync();
 
     // Clear form
     $('#card-frente').value = '';
@@ -998,6 +1016,57 @@ const App = (() => {
       </div>
 
       <div class="settings-section">
+        <h3 class="settings-title">
+          <i data-lucide="cloud" style="width:18px;height:18px;display:inline;vertical-align:middle;margin-right:6px"></i>
+          Sincronização (GitHub Gist)
+        </h3>
+        <p class="setting-desc" style="margin-bottom: var(--space-4)">
+          Sincronize seus cartões entre navegadores e dispositivos usando um Gist privado do GitHub.
+        </p>
+        ${GistSync.isConfigured() ? `
+          <div class="sync-status" style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-4);background:var(--color-surface-offset);border-radius:var(--radius-md);margin-bottom:var(--space-4)">
+            <span style="width:8px;height:8px;border-radius:50%;background:var(--color-success);flex-shrink:0"></span>
+            <div style="flex:1">
+              <div style="font-weight:600;font-size:var(--text-sm)">Sincronização ativa</div>
+              <div style="font-size:var(--text-xs);color:var(--color-text-muted)">
+                Gist: ${GistSync.getGistId().slice(0, 12)}...
+                ${GistSync.getLastSync() ? ` — Última sync: ${formatDate(GistSync.getLastSync().split('T')[0])}` : ''}
+              </div>
+            </div>
+          </div>
+          <div class="settings-actions" style="border-top:none;padding-top:0;flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="App.doSync()">
+              <i data-lucide="refresh-cw"></i>
+              Sincronizar Agora
+            </button>
+            <button class="btn btn-secondary" onclick="App.disconnectSync()">
+              <i data-lucide="unplug"></i>
+              Desconectar
+            </button>
+          </div>
+        ` : `
+          <div class="sync-setup" style="display:flex;flex-direction:column;gap:var(--space-3)">
+            <div class="form-group">
+              <label class="form-label">Personal Access Token (GitHub)</label>
+              <input type="password" class="form-input" id="gist-token" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
+              <span class="form-help">
+                Crie em <a href="https://github.com/settings/tokens/new?scopes=gist&description=LexReview" target="_blank" rel="noopener" style="color:var(--color-primary)">github.com/settings/tokens</a> — marque apenas a permissão <strong>gist</strong>.
+              </span>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Gist ID (opcional — para conectar a um Gist existente)</label>
+              <input type="text" class="form-input" id="gist-id" placeholder="Deixe em branco para criar um novo" />
+              <span class="form-help">Se você já configurou em outro dispositivo, cole o Gist ID aqui para sincronizar.</span>
+            </div>
+            <button class="btn btn-primary" onclick="App.setupSync()">
+              <i data-lucide="cloud"></i>
+              Conectar
+            </button>
+          </div>
+        `}
+      </div>
+
+      <div class="settings-section">
         <h3 class="settings-title">Dados</h3>
         <div class="settings-actions" style="border-top: none; padding-top: 0; flex-wrap: wrap">
           <button class="btn btn-secondary" onclick="App.exportData()">
@@ -1090,6 +1159,86 @@ const App = (() => {
         }}
       ]
     );
+  }
+
+  // ── SYNC ──
+  async function setupSync() {
+    const token = $('#gist-token')?.value?.trim();
+    if (!token) {
+      toast('Cole seu Personal Access Token', 'error');
+      return;
+    }
+
+    const existingGistId = $('#gist-id')?.value?.trim() || '';
+
+    toast('Conectando ao GitHub...', '');
+
+    try {
+      const result = await GistSync.setup(token, existingGistId);
+      toast(`Conectado como ${result.username}! Gist: ${result.gistId.slice(0, 8)}...`, 'success');
+      updateNavBadge();
+      updateSyncButton();
+      renderSettings(); // Re-render para mostrar status
+    } catch (e) {
+      toast('Erro: ' + e.message, 'error');
+    }
+  }
+
+  async function doSync() {
+    if (!GistSync.isConfigured()) {
+      toast('Configure a sincronização primeiro', 'error');
+      return;
+    }
+
+    const btn = document.getElementById('sidebar-sync-btn');
+    const dot = document.getElementById('sync-status-dot');
+    if (btn) btn.classList.add('syncing');
+    toast('Sincronizando...', '');
+
+    try {
+      const result = await GistSync.sync();
+      const s = result.summary;
+      let msg = 'Sincronizado! ';
+      if (s.localOnly > 0) msg += `${s.localOnly} novos enviados. `;
+      if (s.remoteOnly > 0) msg += `${s.remoteOnly} novos recebidos. `;
+      if (s.localOnly === 0 && s.remoteOnly === 0) msg += 'Tudo em dia.';
+      toast(msg, 'success');
+      if (dot) dot.className = 'sync-status-dot connected';
+      updateNavBadge();
+      // Re-render current page
+      Router.navigate(window.location.hash.slice(1) || 'dashboard');
+    } catch (e) {
+      toast('Erro na sync: ' + e.message, 'error');
+      if (dot) dot.className = 'sync-status-dot error';
+    } finally {
+      if (btn) btn.classList.remove('syncing');
+    }
+  }
+
+  function disconnectSync() {
+    showModal(
+      'Desconectar Sincronização',
+      '<p>Seus dados locais serão mantidos, mas a sincronização com o GitHub Gist será desativada.</p><p style="font-size:var(--text-xs);color:var(--color-text-muted)">Anote o Gist ID para reconectar em outro momento.</p>',
+      [
+        { label: 'Cancelar', class: 'btn btn-secondary' },
+        { label: 'Desconectar', class: 'btn btn-danger', action: () => {
+          GistSync.clearConfig();
+          toast('Sincronização desconectada', 'success');
+          updateSyncButton();
+          renderSettings();
+        }}
+      ]
+    );
+  }
+
+  // Auto-sync silencioso após mudanças
+  async function autoSync() {
+    if (!GistSync.isConfigured()) return;
+    try {
+      await GistSync.pushToGist(Storage.getAll());
+    } catch (e) {
+      console.warn('Auto-sync failed:', e.message);
+    }
   }
 
   // ── STATISTICS ──
@@ -1268,6 +1417,7 @@ const App = (() => {
     Router.register('stats', renderStats);
 
     updateNavBadge();
+    updateSyncButton();
     Router.init();
   }
 
@@ -1311,6 +1461,9 @@ const App = (() => {
     triggerImport,
     handleImportFile,
     confirmReset,
+    setupSync,
+    doSync,
+    disconnectSync,
     toggleTheme,
     renderDashboard,
     renderReview,

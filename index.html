@@ -91,6 +91,11 @@
       </nav>
 
       <div class="sidebar-footer">
+        <button class="sidebar-sync-btn" id="sidebar-sync-btn" onclick="App.doSync()" title="Sincronizar com GitHub Gist" style="display:none">
+          <i data-lucide="refresh-cw" class="sync-icon"></i>
+          <span class="sync-label">Sincronizar</span>
+          <span class="sync-status-dot" id="sync-status-dot"></span>
+        </button>
         <button class="theme-toggle" id="theme-toggle-btn" onclick="App.toggleTheme()">
           <i data-lucide="moon"></i>
           Modo Escuro
@@ -110,6 +115,7 @@
   <!-- Scripts -->
   <script src="js/storage.js"></script>
   <script src="js/sm2.js"></script>
+  <script src="js/gist-sync.js"></script>
   <script src="js/router.js"></script>
   <script src="js/app.js"></script>
 </body>
